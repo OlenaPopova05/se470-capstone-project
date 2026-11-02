@@ -1,0 +1,27 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Read-only IAM role for the capstone project
+
+Resources:
+  ReadOnlyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: IAM role with read-only access to network resources
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowEC2AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - !ImportValue CapstoneReadOnlyPolicyArn
+
+Outputs:
+  ReadOnlyRoleArn:
+    Description: ARN of the read-only IAM role
+    Value: !GetAtt ReadOnlyRole.Arn

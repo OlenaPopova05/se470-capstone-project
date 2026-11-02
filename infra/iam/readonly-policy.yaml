@@ -1,0 +1,35 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Read-only IAM policy for the capstone project
+
+Resources:
+  ReadOnlyPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Allows viewing network and CloudFormation resources
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: NetworkReadOnly
+            Effect: Allow
+            Action:
+              - ec2:DescribeVpcs
+              - ec2:DescribeSubnets
+              - ec2:DescribeRouteTables
+              - ec2:DescribeInternetGateways
+            Resource: '*' # the rule is applied for all the resources which are supported by the actions above
+
+          - Sid: CloudFormationReadOnly
+            Effect: Allow
+            Action:
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackResources
+              - cloudformation:ListStacks
+            Resource: '*'
+
+Outputs:
+  ReadOnlyPolicyArn:
+    Description: ARN of the read-only IAM policy
+    Value: !Ref ReadOnlyPolicy
+    Export:
+      Name: CapstoneReadOnlyPolicyArn
