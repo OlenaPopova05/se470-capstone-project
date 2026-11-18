@@ -9,9 +9,9 @@
 
 ## 2. Single-node behavior
 
-- [ ] Build the Coordinator API, in-memory table registry, and a reusable in-memory record-store interface.
-- [ ] Implement table registration and CREATE, READ, EXISTS, DELETE in single-node mode with contract-level status and error behavior.
-- [ ] Verify duplicate tables, duplicate records, missing tables/records, JSON `null`, and two tables using the same key.
+- [x] Build the Coordinator API, in-memory table registry, and a reusable in-memory record-store interface.
+- [x] Implement table registration and CREATE, READ, EXISTS, DELETE in single-node mode with contract-level status and error behavior.
+- [x] Verify duplicate tables, duplicate records, missing tables/records, JSON `null`, and two tables using the same key.
 
 ## 3. Ring and sharded behavior
 
