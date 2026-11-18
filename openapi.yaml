@@ -1,0 +1,698 @@
+
+openapi: 3.0.3
+
+info:
+  title: Serverless Key-Value Store API
+  version: 1.0.0
+  description: |
+    REST API for a multi-table key-value store.
+
+    The Coordinator hashes (table_name, record_key) with SHA-256.
+    Each string is UTF-8 encoded and preceded by its byte length
+    as a 4-byte unsigned big-endian integer. The hash is located
+    on a consistent hashing ring with 100 virtual nodes per shard.
+
+    The same external API is used in single-node and sharded
+    deployments. Single-node records are stored in memory.
+    STORAGE_MODE selects single-node or sharded mode at startup.
+    In sharded mode, at least two shards must register before
+    record operations are accepted. New shard membership is
+    allowed only until the first successful record creation;
+    repeat registration with the same ID and address is allowed.
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+tags:
+  - name: External API
+    description: Client-facing table registration and key-value operations
+
+  - name: Internal API
+    description: Communication and management endpoints
+
+paths:
+  /tables:
+    post:
+      tags:
+        - External API
+      summary: Register a table definition
+      operationId: registerTable
+      description: |
+        Registers a logical table and the name of its
+        partition key attribute.
+
+        Record key values are supplied through {key}
+        in CRUD URLs, not extracted from the stored JSON value.
+        The partition_key name is metadata and its attribute
+        need not appear inside the JSON value.
+
+        Table definitions are maintained by the Coordinator
+        and are distinct from physical shards.
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableDefinition'
+            example:
+              table_name: users
+              partition_key: user_id
+
+      responses:
+        '201':
+          description: Table registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableDefinition'
+              example:
+                table_name: users
+                partition_key: user_id
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /tables/{table_name}/records/{key}:
+    parameters:
+      - name: table_name
+        in: path
+        required: true
+        description: Name of a registered table
+        schema:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z][A-Za-z0-9_-]*$'
+
+      - name: key
+        in: path
+        required: true
+        description: Record key (partition key value) within the specified table
+        schema:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z0-9_-]+$'
+
+    put:
+      tags:
+        - External API
+      summary: Create a record
+      operationId: createRecord
+      description: |
+        Creates a new record in a registered table.
+
+        The key in the URL is the partition key value.
+
+        The Coordinator hashes the length-prefixed UTF-8
+        encoding of (table_name, key) to select the shard.
+
+        Returns 409 if the record already exists.
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRecordRequest'
+            example:
+              value:
+                name: Anna
+                age: 25
+
+      responses:
+        '201':
+          description: Record created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+              example:
+                table_name: users
+                key: '123'
+                value:
+                  name: Anna
+                  age: 25
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '404':
+          $ref: '#/components/responses/TableNotFound'
+
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    get:
+      tags:
+        - External API
+      summary: Read a record
+      operationId: readRecord
+      description: |
+        Reads a record from a registered table by its key.
+
+        The Coordinator uses the table name and key
+        to locate the shard.
+
+      responses:
+        '200':
+          description: Record found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+              example:
+                table_name: users
+                key: '123'
+                value:
+                  name: Anna
+                  age: 25
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '404':
+          description: Table or record not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    head:
+      tags:
+        - External API
+      summary: Check if a record exists
+      operationId: recordExists
+      description: |
+        Checks whether a record exists in a registered table.
+
+        Returns 200 if present and 404 if the record
+        or table is absent.
+
+        No response body is returned.
+
+      responses:
+        '200':
+          description: Record exists
+
+        '400':
+          description: Invalid table name or record key (no response body)
+
+        '422':
+          description: Request validation failed (no response body)
+
+        '404':
+          description: Record or table does not exist (no response body)
+
+        '503':
+          description: Shard is unavailable
+
+    delete:
+      tags:
+        - External API
+      summary: Delete a record
+      operationId: deleteRecord
+      description: |
+        Deletes a record from a registered table if it exists.
+
+        Returns 204 if the record was deleted or already absent.
+        Returns 404 if the table does not exist.
+
+        No body on success.
+
+      responses:
+        '204':
+          description: |
+            Record deleted or already absent.
+            No response body is returned.
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '404':
+          $ref: '#/components/responses/TableNotFound'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /internal/records/{table_name}/{key}:
+    description: |
+      Shard-local record operations called by the Coordinator.
+      The Coordinator verifies that the table is registered and
+      selects the shard before forwarding a request. The shard
+      stores records by (table_name, key) and does not manage
+      table definitions or calculate the hash ring.
+
+    parameters:
+      - name: table_name
+        in: path
+        required: true
+        description: Logical table name
+        schema:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z][A-Za-z0-9_-]*$'
+
+      - name: key
+        in: path
+        required: true
+        description: Record key within the table
+        schema:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z0-9_-]+$'
+
+    put:
+      tags:
+        - Internal API
+      summary: Create a record on a shard
+      operationId: createShardRecord
+      description: |
+        Stores a new record under (table_name, key).
+        Returns 409 without changing the stored value if
+        the record already exists.
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRecordRequest'
+
+      responses:
+        '201':
+          description: Record created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    get:
+      tags:
+        - Internal API
+      summary: Read a record from a shard
+      operationId: readShardRecord
+      description: Reads a stored record by table name and key.
+
+      responses:
+        '200':
+          description: Record found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Record'
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+    head:
+      tags:
+        - Internal API
+      summary: Check if a record exists on a shard
+      operationId: shardRecordExists
+      description: |
+        Returns 200 if the record exists and 404 if it does not.
+        No response body is returned.
+
+      responses:
+        '200':
+          description: Record exists (no response body)
+
+        '400':
+          description: Invalid table name or record key (no response body)
+
+        '422':
+          description: Request validation failed (no response body)
+
+        '404':
+          description: Record does not exist (no response body)
+
+        '503':
+          description: Shard storage is unavailable (no response body)
+
+    delete:
+      tags:
+        - Internal API
+      summary: Delete a record from a shard
+      operationId: deleteShardRecord
+      description: |
+        Deletes the record if it exists. Returns 204 if the
+        record was deleted or was already absent.
+
+      responses:
+        '204':
+          description: Record deleted or already absent (no response body)
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /internal/shards/register:
+    post:
+      tags:
+        - Internal API
+      summary: Register a shard
+      operationId: registerShard
+      description: |
+        Registers a physical shard with the Coordinator.
+
+        Each shard registers itself when it starts.
+        The Coordinator adds 100 virtual nodes for
+        the registered shard to the consistent hash ring.
+
+        A new shard may be added only before the first
+        successful record creation in sharded mode. Once
+        a record has been created, membership changes return
+        409, even if all records are later deleted.
+
+        Re-registering the same shard with the same
+        address does not create duplicate virtual nodes.
+
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShardRegistration'
+            example:
+              shard_id: shard-1
+              address: http://10.0.2.15:8080
+
+      responses:
+        '201':
+          description: Shard registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShardRegistrationResponse'
+              example:
+                shard_id: shard-1
+                status: registered
+                virtual_nodes: 100
+
+        '200':
+          description: Shard already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShardRegistrationResponse'
+              example:
+                shard_id: shard-1
+                status: already_registered
+                virtual_nodes: 100
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+        '422':
+          $ref: '#/components/responses/ValidationFailure'
+
+        '409':
+          description: Shard ID or address conflicts, or ring membership is locked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /health:
+    get:
+      tags:
+        - Internal API
+      summary: Check service health
+      operationId: healthCheck
+      description: |
+        Checks whether the service is running
+        and able to respond to HTTP requests.
+
+        This endpoint does not guarantee that
+        all registered shards are available.
+
+      responses:
+        '200':
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+
+        '503':
+          description: Service is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: unhealthy
+
+components:
+  schemas:
+    TableDefinition:
+      type: object
+      required:
+        - table_name
+        - partition_key
+      additionalProperties: false
+      properties:
+        table_name:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z][A-Za-z0-9_-]*$'
+          description: Unique logical table name
+
+        partition_key:
+          type: string
+          minLength: 1
+          description: |
+            Logical name of the table key attribute.
+            Its value is supplied as {key} in record URLs.
+
+    CreateRecordRequest:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          description: |
+            Any valid JSON value, including null.
+            The value is not used for shard routing.
+      example:
+        value:
+          name: Anna
+          age: 25
+
+    Record:
+      type: object
+      required:
+        - table_name
+        - key
+        - value
+      properties:
+        table_name:
+          type: string
+          pattern: '^[A-Za-z][A-Za-z0-9_-]*$'
+          description: Name of the table containing the record
+
+        key:
+          type: string
+          minLength: 1
+          pattern: '^[A-Za-z0-9_-]+$'
+          description: Unique record key
+
+        value:
+          description: |
+            Any valid JSON value, including null.
+            The value is not used for shard routing.
+
+    ShardRegistration:
+      type: object
+      required:
+        - shard_id
+        - address
+      properties:
+        shard_id:
+          type: string
+          minLength: 1
+          description: Unique physical shard identifier
+
+        address:
+          type: string
+          format: uri
+          description: HTTP address of the shard
+
+    ShardRegistrationResponse:
+      type: object
+      required:
+        - shard_id
+        - status
+        - virtual_nodes
+      properties:
+        shard_id:
+          type: string
+
+        status:
+          type: string
+          enum:
+            - registered
+            - already_registered
+
+        virtual_nodes:
+          type: integer
+          minimum: 1
+
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - healthy
+            - unhealthy
+
+    Error:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code
+
+        message:
+          type: string
+          description: Human-readable error description
+
+    HTTPValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationError'
+
+    ValidationError:
+      type: object
+      required:
+        - loc
+        - msg
+        - type
+      properties:
+        loc:
+          type: array
+          items:
+            anyOf:
+              - type: string
+              - type: integer
+        msg:
+          type: string
+        type:
+          type: string
+        input: {}
+        ctx:
+          type: object
+
+  responses:
+    BadRequest:
+      description: Invalid request rejected by Coordinator
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: bad_request
+            message: Invalid record key
+
+    ValidationFailure:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/HTTPValidationError'
+
+    NotFound:
+      description: Record not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: not_found
+            message: Record does not exist
+
+    Conflict:
+      description: Resource conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: conflict
+            message: Resource already exists
+
+    ServiceUnavailable:
+      description: Required shard or storage is unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: service_unavailable
+            message: Required shard or storage is unavailable
+
+    TableNotFound:
+      description: Table is not registered
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: table_not_found
+            message: Table does not exist
