@@ -65,3 +65,6 @@ UNIT
 
 systemctl daemon-reload
 systemctl enable kvstore.service
+# This script also runs from kvstore-refresh on later boots. Queue the app
+# restart without waiting: kvstore.service starts after refresh has finished.
+systemctl --no-block restart kvstore.service
