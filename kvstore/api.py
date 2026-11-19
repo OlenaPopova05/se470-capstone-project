@@ -5,29 +5,9 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
 
 from kvstore.coordinator import APIError, Coordinator
-
-
-TABLE_NAME_PATTERN = r"^[A-Za-z][A-Za-z0-9_-]*$"
-
-
-class TableDefinition(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    table_name: str = Field(pattern=TABLE_NAME_PATTERN)
-    partition_key: str = Field(min_length=1)
-
-
-class CreateRecordRequest(BaseModel):
-    value: Any
-
-
-class Record(BaseModel):
-    table_name: str
-    key: str
-    value: Any
+from kvstore.models import CreateRecordRequest, Record, ShardRegistration, ShardRegistrationResponse, TableDefinition
 
 
 def create_app(coordinator: Coordinator | None = None) -> FastAPI:
@@ -45,6 +25,13 @@ def create_app(coordinator: Coordinator | None = None) -> FastAPI:
     @app.post("/tables", status_code=201, response_model=TableDefinition)
     def register_table(definition: TableDefinition) -> dict[str, str]:
         return service.register_table(definition.model_dump())
+
+    @app.post("/internal/shards/register", status_code=201, response_model=ShardRegistrationResponse)
+    def register_shard(definition: ShardRegistration, response: Response) -> dict[str, str | int]:
+        result = service.register_shard(definition.model_dump(mode="json"))
+        if result["status"] == "already_registered":
+            response.status_code = 200
+        return result
 
     @app.put("/tables/{table_name}/records/{key}", status_code=201, response_model=Record)
     def create_record(table_name: str, key: str, body: CreateRecordRequest) -> dict[str, Any]:

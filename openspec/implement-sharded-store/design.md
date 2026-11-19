@@ -31,7 +31,7 @@
 
 - In sharded mode, new shard IDs may be registered while no record has ever been successfully created. A third shard can therefore be added to an empty two-shard ring and the routing map can be recomputed.
 - At least two shards must be registered before sharded record operations are accepted. Until then, the Coordinator returns `503` for record operations; table registration can proceed.
-- The first successful record CREATE locks membership for that running deployment. Later registration of a new shard or changing an existing shard's address returns `409`, even if every record is deleted. Re-registering the same ID and address remains idempotent (`200`) and adds no virtual nodes.
+- The first successful record CREATE locks membership for that running deployment. An attempted CREATE with an uncertain outcome also locks membership, because a shard may have written the record before the request failed. Later registration of a new shard or changing an existing shard's address returns `409`, even if every record is deleted. Re-registering the same ID and address remains idempotent (`200`) and adds no virtual nodes. Before the lock, changing a registered shard's address is allowed and returns `201`; two IDs cannot share one address.
 - This lock is a Milestone 2 safety boundary. There is no data transfer, shard removal, or online resharding. A fresh empty deployment may construct a new ring. A shard failure does not cause automatic remapping; affected requests return `503`.
 - The defense demo will show the owner mapping for a fixed set of sample keys before and after adding a shard to an empty ring, then show that membership changes are rejected after a successful write. This demonstrates ring behavior without implying that stored data was migrated.
 

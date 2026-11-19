@@ -26,7 +26,7 @@ Each registered physical shard SHALL have 100 deterministic virtual-node positio
 
 ### Requirement: Empty-ring membership changes
 
-In sharded mode, the Coordinator SHALL allow registering new physical shards until the first successful record CREATE. It SHALL require at least two registered shards before accepting record operations. After the first successful CREATE, it SHALL reject new shard IDs and changes to registered shard addresses with `409`, even if all records are later deleted. Re-registering an existing ID with the same address SHALL return `200` without adding virtual nodes.
+In sharded mode, the Coordinator SHALL allow registering new physical shards until the first successful record CREATE or an attempted CREATE whose outcome is uncertain. It SHALL require at least two registered shards before accepting record operations. After membership is locked, it SHALL reject new shard IDs and changes to registered shard addresses with `409`, even if all records are later deleted. Re-registering an existing ID with the same address SHALL return `200` without adding virtual nodes. Before membership is locked, changing an existing shard's address SHALL return `201`; registering a second ID with an address already in use SHALL return `409`.
 
 #### Scenario: Add a shard before writes
 - **WHEN** two shards are registered, no record has ever been created, and a third shard registers
@@ -39,6 +39,10 @@ In sharded mode, the Coordinator SHALL allow registering new physical shards unt
 #### Scenario: Reject membership change after a write
 - **WHEN** a record was successfully created and a new shard or changed address is registered
 - **THEN** registration returns `409` and the existing ring remains unchanged.
+
+#### Scenario: Uncertain write result
+- **WHEN** a CREATE may have reached a shard but the Coordinator cannot confirm its result
+- **THEN** the Coordinator returns `503` and locks membership to preserve the possible record's owner.
 
 #### Scenario: Idempotent re-registration
 - **WHEN** the same shard ID and address are registered again

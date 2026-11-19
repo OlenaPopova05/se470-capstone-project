@@ -20,7 +20,7 @@ Allow membership changes after writes and move affected records. This provides c
 
 ## Decision
 
-Choose **B** for Milestone 2. The sharded deployment starts empty. At least two physical shards register before record operations. A third shard may join while no record has ever been successfully created. The first successful CREATE locks membership for that running deployment. Deleting all records does not unlock it. Re-registering the same shard ID and address remains idempotent; a new ID or changed address returns `409` after lock.
+Choose **B** for Milestone 2. The sharded deployment starts empty. At least two physical shards register before record operations. A third shard may join while no record has ever been successfully created. The first successful CREATE locks membership for that running deployment. An attempted CREATE whose result cannot be confirmed also locks membership: the shard might have stored the record before the connection failed. Deleting all records does not unlock it. Re-registering the same shard ID and address remains idempotent; a new ID or changed address returns `409` after lock.
 
 The move from single-node development to the sharded deployment uses fresh empty stores. There is no migration of temporary single-node data. Online addition and data rebalancing are deferred to a later milestone.
 

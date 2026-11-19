@@ -15,15 +15,15 @@
 
 ## 3. Ring and sharded behavior
 
-- [ ] Implement and test the exact length-prefixed UTF-8 hash input, SHA-256 positions, 100 virtual nodes per shard, clockwise lookup, and wraparound.
-- [ ] Implement shard registration, idempotent re-registration, empty-ring additions, two-shard readiness, and membership lock after the first successful CREATE.
-- [ ] Implement the shard-local internal CRUD API and Coordinator forwarding for all four operations.
-- [ ] Verify writes and reads reach the selected shard, failed shards yield `503`, and no local fallback occurs in sharded mode.
-- [ ] Demonstrate routing changes when a third shard joins an empty ring and rejection of membership changes after a write.
+- [x] Implement and test the exact length-prefixed UTF-8 hash input, SHA-256 positions, 100 virtual nodes per shard, clockwise lookup, and wraparound.
+- [x] Implement shard registration, idempotent re-registration, empty-ring additions, two-shard readiness, and membership lock after the first successful CREATE.
+- [x] Implement the shard-local internal CRUD API and Coordinator forwarding for all four operations.
+- [x] Verify writes and reads reach the selected shard, failed shards yield `503`, and no local fallback occurs in sharded mode.
+- [x] Demonstrate routing changes when a third shard joins an empty ring and rejection of membership changes after a write.
 
 ## 4. Local and AWS delivery
 
-- [ ] Provide a reproducible local startup for one Coordinator and two shards with a smoke-test script or commands.
+- [x] Provide a reproducible local startup for one Coordinator and two shards with a smoke-test script or commands.
 - [ ] Verify AWS Academy permissions, private-shard artifact delivery, and CI/CD credentials before choosing the deployment mechanism; record the decision.
 - [ ] Create and validate a separate CloudFormation application stack that reuses Milestone 1 network outputs.
 - [ ] Deploy the application stack in the sandbox; verify endpoint reachability, security boundaries, service health, and CRUD across two shards.

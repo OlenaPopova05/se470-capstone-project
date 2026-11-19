@@ -9,7 +9,7 @@ Milestone 2 must demonstrate table registration, key-based CRUD, Coordinator rou
 - Implement the OpenAPI contract for table registration and CREATE, READ, EXISTS, and DELETE.
 - Support a single-node Coordinator with in-memory storage, then a sharded deployment with at least two physical shards.
 - Route records by SHA-256 of the length-prefixed UTF-8 encoding of `(table_name, record_key)` and a ring with 100 virtual nodes per shard.
-- Allow registration and ring changes while the sharded deployment has never accepted a record; lock membership after the first successful CREATE. Demonstrate adding a shard to an empty ring. Data migration is outside this change.
+- Allow registration and ring changes while the sharded deployment has never accepted a record; lock membership after the first successful CREATE or a CREATE whose outcome is uncertain. Demonstrate adding a shard to an empty ring. Data migration is outside this change.
 - Add an application CloudFormation stack separate from the Milestone 1 network stack, and a CI/CD pipeline that deploys infrastructure and application changes within AWS Academy constraints.
 - Benchmark the two-shard store with YCSB and retain a reproducible baseline for later milestones.
 

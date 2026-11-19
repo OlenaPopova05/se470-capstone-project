@@ -17,7 +17,8 @@ info:
     STORAGE_MODE selects single-node or sharded mode at startup.
     In sharded mode, at least two shards must register before
     record operations are accepted. New shard membership is
-    allowed only until the first successful record creation;
+    allowed only until the first successful record creation
+    or a CREATE whose result cannot be confirmed;
     repeat registration with the same ID and address is allowed.
 
 servers:
@@ -254,6 +255,9 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
 
   /internal/records/{table_name}/{key}:
+    servers:
+      - url: http://localhost:8081
+        description: Example shard address; use the address registered for the selected shard
     description: |
       Shard-local record operations called by the Coordinator.
       The Coordinator verifies that the table is registered and
@@ -407,10 +411,13 @@ paths:
         A new shard may be added only before the first
         successful record creation in sharded mode. Once
         a record has been created, membership changes return
-        409, even if all records are later deleted.
+        409, even if all records are later deleted. A CREATE
+        with an uncertain outcome also locks membership.
 
         Re-registering the same shard with the same
         address does not create duplicate virtual nodes.
+        Before membership is locked, a shard may update its
+        address. Different shard IDs cannot share an address.
 
       requestBody:
         required: true
@@ -424,7 +431,7 @@ paths:
 
       responses:
         '201':
-          description: Shard registered successfully
+          description: Shard registered or its address updated before writes
           content:
             application/json:
               schema:
@@ -563,7 +570,7 @@ components:
         address:
           type: string
           format: uri
-          description: HTTP address of the shard
+          description: Base HTTP(S) address of the shard, without a path, query, or fragment
 
     ShardRegistrationResponse:
       type: object
