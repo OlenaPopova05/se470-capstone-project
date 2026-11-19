@@ -22,13 +22,11 @@ Parameters:
 
   InstanceType:
     Type: String
-    Default: t3.nano
+    Default: t3.micro
     AllowedValues:
-      - t2.nano
       - t2.micro
-      - t3.nano
       - t3.micro
-    Description: Small sandbox-approved EC2 type for all three instances
+    Description: EC2 type with enough memory for Amazon Linux 2023 bootstrap on all three instances
 
   InstanceProfileName:
     Type: String

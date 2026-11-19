@@ -14,12 +14,10 @@ on:
       instance_type:
         description: EC2 type for Coordinator and both shards
         required: true
-        default: t3.nano
+        default: t3.micro
         type: choice
         options:
-          - t3.nano
           - t3.micro
-          - t2.nano
           - t2.micro
       root_device_name:
         description: Root device name shown by the chosen AMI
