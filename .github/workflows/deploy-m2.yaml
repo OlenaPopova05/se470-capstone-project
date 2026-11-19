@@ -1,0 +1,173 @@
+name: Deploy Milestone 2 to AWS Academy
+
+on:
+  workflow_dispatch:
+    inputs:
+      ami_id:
+        description: Amazon Linux 2023 x86_64 AMI ID in us-east-1
+        required: true
+        type: string
+      client_cidr:
+        description: Your public IPv4 address with /32, allowed to call Coordinator
+        required: true
+        type: string
+      instance_type:
+        description: EC2 type for Coordinator and both shards
+        required: true
+        default: t3.nano
+        type: choice
+        options:
+          - t3.nano
+          - t3.micro
+          - t2.nano
+          - t2.micro
+      root_device_name:
+        description: Root device name shown by the chosen AMI
+        required: true
+        default: /dev/xvda
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capstone-m2-aws-academy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Use Python 3.11 for artifact build
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+
+      - name: Check shell and CloudFormation templates
+        run: |
+          set -euo pipefail
+          bash -n infra/application/bootstrap.sh infra/application/refresh.sh infra/application/build_artifact.sh
+          python -m pip install cfn-lint
+          cfn-lint infra/network/network.yaml infra/artifacts/artifacts.yaml infra/application/application.yaml
+
+      - name: Build Linux Python 3.11 application archive
+        run: bash infra/application/build_artifact.sh
+
+      - name: Configure temporary AWS Academy credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: us-east-1
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Check AWS account and caller address
+        id: aws_context
+        run: |
+          set -euo pipefail
+          aws sts get-caller-identity --query '{Account:Account,Arn:Arn}' --output json
+          runner_ip=$(curl -4fsS --max-time 10 https://checkip.amazonaws.com | tr -d '\r\n')
+          if [[ ! "$runner_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Could not determine runner IPv4 address' >&2
+            exit 1
+          fi
+          echo "runner_cidr=$runner_ip/32" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy network stack
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/network/network.yaml \
+            --stack-name capstone-network \
+            --no-fail-on-empty-changeset
+
+      - name: Deploy versioned artifact bucket
+        run: |
+          aws cloudformation deploy \
+            --template-file infra/artifacts/artifacts.yaml \
+            --stack-name capstone-artifacts \
+            --no-fail-on-empty-changeset
+
+      - name: Upload application archive to S3
+        run: |
+          set -euo pipefail
+          bucket=$(aws cloudformation list-exports \
+            --query "Exports[?Name=='CapstoneArtifactBucketName'].Value | [0]" \
+            --output text)
+          if [[ -z "$bucket" || "$bucket" == None ]]; then
+            echo 'Artifact bucket export was not found' >&2
+            exit 1
+          fi
+          aws s3 cp dist/kvstore-m2.tar.gz "s3://$bucket/releases/current.tar.gz"
+          echo "Artifact uploaded to s3://$bucket/releases/current.tar.gz"
+
+      - name: Deploy Coordinator and two shards
+        env:
+          AMI_ID: ${{ inputs.ami_id }}
+          CLIENT_CIDR: ${{ inputs.client_cidr }}
+          RUNNER_CIDR: ${{ steps.aws_context.outputs.runner_cidr }}
+          INSTANCE_TYPE: ${{ inputs.instance_type }}
+          ROOT_DEVICE_NAME: ${{ inputs.root_device_name }}
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file infra/application/application.yaml \
+            --stack-name capstone-application \
+            --parameter-overrides \
+              "AmiId=$AMI_ID" \
+              "ClientCidr=$CLIENT_CIDR" \
+              "RunnerCidr=$RUNNER_CIDR" \
+              "InstanceType=$INSTANCE_TYPE" \
+              "RootDeviceName=$ROOT_DEVICE_NAME" \
+              'InstanceProfileName=myS3Role' \
+              'ArtifactKey=releases/current.tar.gz' \
+              "ArtifactRevision=${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --no-fail-on-empty-changeset
+
+      - name: Wait for Coordinator health
+        id: coordinator_health
+        run: |
+          set -euo pipefail
+          instance_id=$(aws cloudformation describe-stack-resource \
+            --stack-name capstone-application \
+            --logical-resource-id CoordinatorInstance \
+            --query StackResourceDetail.PhysicalResourceId \
+            --output text)
+          for attempt in {1..60}; do
+            public_ip=$(aws ec2 describe-instances \
+              --instance-ids "$instance_id" \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+            if [[ "$public_ip" != None ]] && \
+               curl -fsS --max-time 3 "http://$public_ip:8080/health"; then
+              echo "url=http://$public_ip:8080" >> "$GITHUB_OUTPUT"
+              echo "Coordinator URL: http://$public_ip:8080" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Coordinator did not become healthy; inspect EC2 cloud-init and kvstore service logs' >&2
+          exit 1
+
+      - name: Check that both shards registered and reads route
+        env:
+          COORDINATOR_URL: ${{ steps.coordinator_health.outputs.url }}
+        run: |
+          set -euo pipefail
+          table="ci_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          curl -fsS --max-time 5 -X POST "$COORDINATOR_URL/tables" \
+            -H 'Content-Type: application/json' \
+            -d "{\"table_name\":\"$table\",\"partition_key\":\"id\"}"
+          for attempt in {1..60}; do
+            if response=$(curl -sS --max-time 3 "$COORDINATOR_URL/tables/$table/records/ready") && \
+               jq -e '.error == "not_found"' <<< "$response" > /dev/null; then
+              echo 'Both shards registered and a read reached the owning shard.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Sharded read did not become ready; inspect shard service logs' >&2
+          exit 1

@@ -25,7 +25,7 @@
 
 - [x] Provide a reproducible local startup for one Coordinator and two shards with a smoke-test script or commands.
 - [ ] Verify AWS Academy permissions, private-shard artifact delivery, and CI/CD credentials before choosing the deployment mechanism; record the decision.
-- [ ] Create and validate a separate CloudFormation application stack that reuses Milestone 1 network outputs.
+- [x] Create and locally validate a separate CloudFormation application template that reuses Milestone 1 network outputs.
 - [ ] Deploy the application stack in the sandbox; verify endpoint reachability, security boundaries, service health, and CRUD across two shards.
 - [ ] Add CI/CD checks and pipeline stages that deploy both IaC and application updates; demonstrate one update of each.
 

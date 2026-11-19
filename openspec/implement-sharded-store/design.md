@@ -38,7 +38,7 @@
 ## Delivery and Operations
 
 - Keep the Milestone 1 network stack intact and define application resources in a separate CloudFormation stack using its exported network IDs.
-- The initial target is one Coordinator and two shard services in the AWS Academy sandbox. The Coordinator is client reachable; shard record endpoints are restricted to internal traffic. The chosen compute sizes and runtime schedule must stay within the documented sandbox quotas and credit budget.
+- The initial target is three small EC2 instances in the AWS Academy sandbox: the Coordinator in the public subnet and one shard in each private subnet. Only the Coordinator has a public IP; its client API is restricted by a `ClientCidr` parameter, and shard record endpoints accept traffic only from its security group. The chosen compute sizes and runtime schedule must stay within the documented sandbox quotas and credit budget. See `docs/adr/application-compute.md`.
 - Private subnets have no general internet route. Before implementing application deployment, verify an allowed artifact-delivery and credential path for private shards, then record the selected method in the design/ADR. CI/CD must deploy both CloudFormation and application updates; a pipeline that only runs tests does not satisfy this change.
 - Provide a local multi-process or container-based startup path so the API and ring can be demonstrated without cloud access.
 - Use YCSB through a documented binding or adapter for this REST API. Fix workload, operation count, concurrency, key distribution, environment, and run commands; retain throughput and latency results for the two-shard baseline and note whether the run is local or AWS-hosted.

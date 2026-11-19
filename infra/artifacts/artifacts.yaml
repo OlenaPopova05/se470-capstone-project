@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Private S3 bucket for Milestone 2 application deployment artifacts
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: capstone-artifacts
+
+Outputs:
+  ArtifactBucketName:
+    Description: Bucket for versioned Coordinator and shard deployment packages
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: CapstoneArtifactBucketName

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh capstone application from S3 at boot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/kvstore-deploy.env
+ExecStart=/usr/local/sbin/kvstore-refresh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EC2 and security groups for one Coordinator and two private shards
+
+Parameters:
+  # Amazon Machine Image-- base image for EC2 instances
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: x86_64 Linux AMI approved in the AWS Academy sandbox
+
+  RootDeviceName:
+    Type: String
+    Default: /dev/xvda
+    Description: Root device name of AmiId; check the AMI before deployment
+
+  ClientCidr:
+    Type: String
+    Description: IPv4 CIDR allowed to call the Coordinator, for example your public IP/32
+
+  RunnerCidr:
+    Type: String
+    Description: Current GitHub Actions runner IPv4 CIDR for deployment health checks
+
+  InstanceType:
+    Type: String
+    Default: t3.nano
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t3.nano
+      - t3.micro
+    Description: Small sandbox-approved EC2 type for all three instances
+
+  InstanceProfileName:
+    Type: String
+    Default: myS3Role
+    Description: Existing instance profile allowed to read the deployment artifact from S3
+
+  ArtifactKey:
+    Type: String
+    Description: S3 object key of the prebuilt application archive, for example releases/current.tar.gz
+
+  ArtifactRevision:
+    Type: String
+    Description: Unique revision that causes CloudFormation to restart instances for application updates
+
+Resources:
+  CoordinatorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Client API and private shard registration for Coordinator
+      VpcId: !ImportValue CapstoneVpcId
+      SecurityGroupIngress:
+        - Description: Client REST API
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref ClientCidr
+        - Description: GitHub Actions deployment health check
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref RunnerCidr
+      Tags:
+        - Key: Name
+          Value: capstone-coordinator-sg
+
+  ShardSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Shard record API reachable only from Coordinator
+      VpcId: !ImportValue CapstoneVpcId
+      Tags:
+        - Key: Name
+          Value: capstone-shard-sg
+
+  CoordinatorShardRegistrationIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow shards to register with Coordinator on its private address
+      GroupId: !Ref CoordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref ShardSecurityGroup
+
+  ShardRecordIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow Coordinator to call shard-local CRUD
+      GroupId: !Ref ShardSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8081
+      ToPort: 8081
+      SourceSecurityGroupId: !Ref CoordinatorSecurityGroup
+
+  CoordinatorInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: CoordinatorShardRegistrationIngress
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfileName
+      CreditSpecification:
+        CPUCredits: standard
+      MetadataOptions:
+        HttpTokens: required
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          DeleteOnTermination: true
+          SubnetId: !ImportValue CapstonePublicSubnetId
+          GroupSet:
+            - !Ref CoordinatorSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: !Ref RootDeviceName
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              # Deployment revision ${ArtifactRevision}
+              export AWS_DEFAULT_REGION=${AWS::Region}
+              mkdir -p /opt/kvstore
+              cat > /etc/kvstore-deploy.env <<'ENV'
+              ARTIFACT_BUCKET=${ArtifactBucketName}
+              ARTIFACT_KEY=${ArtifactKey}
+              AWS_DEFAULT_REGION=${AWS::Region}
+              MODE=coordinator
+              ENV
+              aws s3 cp "s3://${ArtifactBucketName}/${ArtifactKey}" /tmp/kvstore.tar.gz
+              tar -xzf /tmp/kvstore.tar.gz -C /opt/kvstore
+              install -m 0755 /opt/kvstore/infra/application/refresh.sh /usr/local/sbin/kvstore-refresh
+              install -m 0644 /opt/kvstore/infra/application/kvstore-refresh.service /etc/systemd/system/kvstore-refresh.service
+              systemctl daemon-reload
+              systemctl enable --now kvstore-refresh.service
+              systemctl start kvstore.service
+            - ArtifactBucketName: !ImportValue CapstoneArtifactBucketName
+      Tags:
+        - Key: Name
+          Value: capstone-coordinator
+        - Key: Component
+          Value: coordinator
+
+  ShardOneInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - ShardRecordIngress
+      - CoordinatorShardRegistrationIngress
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfileName
+      CreditSpecification:
+        CPUCredits: standard
+      MetadataOptions:
+        HttpTokens: required
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          SubnetId: !ImportValue CapstonePrivateSubnet1Id
+          GroupSet:
+            - !Ref ShardSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: !Ref RootDeviceName
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              # Deployment revision ${ArtifactRevision}
+              export AWS_DEFAULT_REGION=${AWS::Region}
+              mkdir -p /opt/kvstore
+              cat > /etc/kvstore-deploy.env <<'ENV'
+              ARTIFACT_BUCKET=${ArtifactBucketName}
+              ARTIFACT_KEY=${ArtifactKey}
+              AWS_DEFAULT_REGION=${AWS::Region}
+              MODE=shard
+              SHARD_ID=shard-1
+              COORDINATOR_URL=${CoordinatorInternalUrl}
+              ENV
+              aws s3 cp "s3://${ArtifactBucketName}/${ArtifactKey}" /tmp/kvstore.tar.gz
+              tar -xzf /tmp/kvstore.tar.gz -C /opt/kvstore
+              install -m 0755 /opt/kvstore/infra/application/refresh.sh /usr/local/sbin/kvstore-refresh
+              install -m 0644 /opt/kvstore/infra/application/kvstore-refresh.service /etc/systemd/system/kvstore-refresh.service
+              systemctl daemon-reload
+              systemctl enable --now kvstore-refresh.service
+              systemctl start kvstore.service
+            - ArtifactBucketName: !ImportValue CapstoneArtifactBucketName
+              CoordinatorInternalUrl: !Sub 'http://${CoordinatorInstance.PrivateIp}:8080'
+      Tags:
+        - Key: Name
+          Value: capstone-shard-1
+        - Key: Component
+          Value: shard
+
+  ShardTwoInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - ShardRecordIngress
+      - CoordinatorShardRegistrationIngress
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfileName
+      CreditSpecification:
+        CPUCredits: standard
+      MetadataOptions:
+        HttpTokens: required
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: false
+          DeleteOnTermination: true
+          SubnetId: !ImportValue CapstonePrivateSubnet2Id
+          GroupSet:
+            - !Ref ShardSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: !Ref RootDeviceName
+          Ebs:
+            VolumeSize: 8
+            VolumeType: gp2
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+              set -euo pipefail
+              # Deployment revision ${ArtifactRevision}
+              export AWS_DEFAULT_REGION=${AWS::Region}
+              mkdir -p /opt/kvstore
+              cat > /etc/kvstore-deploy.env <<'ENV'
+              ARTIFACT_BUCKET=${ArtifactBucketName}
+              ARTIFACT_KEY=${ArtifactKey}
+              AWS_DEFAULT_REGION=${AWS::Region}
+              MODE=shard
+              SHARD_ID=shard-2
+              COORDINATOR_URL=${CoordinatorInternalUrl}
+              ENV
+              aws s3 cp "s3://${ArtifactBucketName}/${ArtifactKey}" /tmp/kvstore.tar.gz
+              tar -xzf /tmp/kvstore.tar.gz -C /opt/kvstore
+              install -m 0755 /opt/kvstore/infra/application/refresh.sh /usr/local/sbin/kvstore-refresh
+              install -m 0644 /opt/kvstore/infra/application/kvstore-refresh.service /etc/systemd/system/kvstore-refresh.service
+              systemctl daemon-reload
+              systemctl enable --now kvstore-refresh.service
+              systemctl start kvstore.service
+            - ArtifactBucketName: !ImportValue CapstoneArtifactBucketName
+              CoordinatorInternalUrl: !Sub 'http://${CoordinatorInstance.PrivateIp}:8080'
+      Tags:
+        - Key: Name
+          Value: capstone-shard-2
+        - Key: Component
+          Value: shard
+
+Outputs:
+  CoordinatorUrl:
+    Description: Client-facing API URL after the application is installed and started
+    Value: !Sub 'http://${CoordinatorInstance.PublicIp}:8080'
+
+  CoordinatorInternalUrl:
+    Description: Private URL used by shards for startup registration
+    Value: !Sub 'http://${CoordinatorInstance.PrivateIp}:8080'
+
+  ShardOneInternalUrl:
+    Value: !Sub 'http://${ShardOneInstance.PrivateIp}:8081'
+
+  ShardTwoInternalUrl:
+    Value: !Sub 'http://${ShardTwoInstance.PrivateIp}:8081'
